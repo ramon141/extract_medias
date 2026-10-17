@@ -1,0 +1,14 @@
+services:
+  addon:
+    build: .
+    image: extract-medias
+    # só o próprio computador alcança o addon; troque por "7100:7000" para abrir à rede. 7000 fica de fora: o AirPlay do macOS usa
+    ports:
+      - "127.0.0.1:7100:7000"
+    restart: unless-stopped
+    init: true # encerra os processos do Chromium que ficarem órfãos
+    shm_size: "1gb" # o Chromium trava com a memória compartilhada padrão (64 MB)
+    mem_limit: 2g # evita o Chromium inflar a VM do Docker Desktop
+    tmpfs:
+      - /tmp # perfis temporários do Chromium em RAM, sem passar pelo disco da VM
+    # sem volumes de código: bind mount no macOS (VirtioFS) é lento; imagem já contém tudo

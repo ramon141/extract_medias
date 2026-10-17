@@ -96,8 +96,13 @@ class MyEmbedSource(Source):
         )
 
     def _ligar(self, options: list[ServerOption], referer: str) -> list[StreamLink]:
-        """Resolve os servers para mídia real; sem vídeo, devolve lista vazia."""
+        """Resolve os servers para mídia real; sem vídeo, devolve lista vazia.
+
+        Servers que o próprio playerflix marca como indisponíveis são pulados:
+        só gastavam o tempo limite sem entregar vídeo.
+        """
         links: list[StreamLink] = []
+        options = [option for option in options if option.healthy]
         if not options:
             return links
         for result in self.resolver.resolve(options, referer=referer):

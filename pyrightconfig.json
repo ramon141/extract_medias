@@ -1,5 +1,5 @@
 {
-  "include": ["extractor", "media", "sources", "tests", "main.py"],
+  "include": ["extractor", "media", "sources", "tests", "main.py", "stremio.py"],
   "exclude": ["**/__pycache__", "**/.venv", "**/venv"],
   "venvPath": ".",
   "venv": ".venv",

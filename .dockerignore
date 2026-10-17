@@ -1,2 +1,11 @@
+.git
+.venv
+.env
+__pycache__
+*.pyc
+tests
+extractor
+media
+pyrightconfig.json
 Dockerfile
 docker-compose.yml

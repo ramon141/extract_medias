@@ -86,6 +86,16 @@ class FilmeTest(unittest.TestCase):
 
         self.assertEqual(media.links, [])
 
+    def test_server_indisponivel_e_pulado(self) -> None:
+        indisponivel = ServerOption(id="premium", label="Premium", embed_url="https://p/x", healthy=False)
+        cliente = ClienteFake(filme=(INFO_FILME, [indisponivel]))
+        resolver = ResolverFake(mapa={"premium": ["https://cdn/x.m3u8"]})
+        fonte = MyEmbedSource(client=cliente, resolver=resolver)
+
+        media = fonte.fetch("tt22084616")
+
+        self.assertEqual(media.links, [])
+
     def test_url_completa_aceita_tambem(self) -> None:
         cliente = ClienteFake(filme=(INFO_FILME, []))
         fonte = MyEmbedSource(client=cliente, resolver=ResolverFake())
