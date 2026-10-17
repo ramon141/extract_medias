@@ -36,7 +36,7 @@ MANIFEST: dict[str, object] = {
     "version": "1.0.0",
     "name": "Extract Medias",
     "description": "Links de vídeo extraídos pelo projeto extract_medias.",
-    "resources": ["stream"],
+    "resources": ["stream", "meta"],
     "types": ["movie", "series"],
     "idPrefixes": ["tt"],
     "catalogs": [],
@@ -45,6 +45,7 @@ MANIFEST: dict[str, object] = {
 CACHE_TTL = 120.0  # links expiram em minutos; só evita repetir a extração do mesmo pedido
 
 _ROTA_STREAM = re.compile(r"^/stream/(movie|series)/([^/]+)\.json$")
+_ROTA_META = re.compile(r"^/meta/(movie|series)/(tt\d+)\.json$")
 _ID_FILME = re.compile(r"^tt\d+$")
 _ID_EPISODIO = re.compile(r"^(tt\d+):(\d+):(\d+)$")
 
@@ -62,6 +63,32 @@ def tmdb_da_serie(imdb: str, timeout: float = 8.0) -> str | None:
         return None
     codigo = meta.get("moviedb_id")
     return str(codigo) if isinstance(codigo, int) and codigo > 0 else None
+
+
+# TMDB Addon (idioma pt-BR, sem catálogos): o catálogo padrão do Stremio só tem inglês
+_META_PTBR = os.environ.get(
+    "META_PTBR_URL", "https://tmdb.elfhosted.com/N4IgNghgdg5grhGBTEAuEAHALgWgEIBKIANCAMYRYRgD2MAzmgNoC6AvkA"
+).rstrip("/")
+_META_TTL = 6 * 3600.0
+_meta_cache: dict[str, tuple[float, dict[str, object]]] = {}
+
+
+def meta_ptbr(tipo: str, identificador: str, timeout: float = 15.0) -> dict[str, object] | None:
+    """Informações do título em português; None se o serviço falhar (o Stremio usa o próximo addon)."""
+    chave = f"{tipo}/{identificador}"
+    guardado = _meta_cache.get(chave)
+    if guardado and time.monotonic() - guardado[0] < _META_TTL:
+        return guardado[1]
+    try:
+        resposta = requests.get(f"{_META_PTBR}/meta/{chave}.json", timeout=timeout)
+        resposta.raise_for_status()
+        corpo = _dict(resposta.json())
+    except (requests.RequestException, ValueError):
+        return None
+    if not _dict(corpo.get("meta")).get("name"):
+        return None
+    _meta_cache[chave] = (time.monotonic(), corpo)
+    return corpo
 
 
 class Extrator:
@@ -194,6 +221,11 @@ def criar_handler(extrator: Extrator, token: str = "") -> type[BaseHTTPRequestHa
                 rota = _ROTA_STREAM.match(caminho)
                 if rota:
                     self._enviar(200, resposta_stream(extrator, rota.group(1), rota.group(2)))
+                    return
+                rota_meta = _ROTA_META.match(caminho)
+                if rota_meta:
+                    meta = meta_ptbr(rota_meta.group(1), rota_meta.group(2))
+                    self._enviar(200 if meta else 404, meta or {"erro": "não encontrado"})
                     return
                 self._enviar(404, {"erro": "não encontrado"})
             except (BrokenPipeError, ConnectionResetError):

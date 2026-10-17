@@ -2,6 +2,7 @@ import json
 import threading
 import time
 import unittest
+from unittest import mock
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -44,6 +45,16 @@ class ServidorTest(unittest.TestCase):
 
     def test_manifest(self) -> None:
         self.assertEqual(self._json("/manifest.json"), MANIFEST)
+
+    def test_meta_em_portugues(self) -> None:
+        corpo: dict[str, object] = {"meta": {"name": "Matrix", "description": "O jovem programador"}}
+        with mock.patch("stremio.meta_ptbr", return_value=corpo):
+            self.assertEqual(self._json("/meta/movie/tt0133093.json"), corpo)
+
+    def test_meta_indisponivel_devolve_404(self) -> None:
+        with mock.patch("stremio.meta_ptbr", return_value=None), self.assertRaises(HTTPError) as erro:
+            _ = self._json("/meta/movie/tt0133093.json")
+        self.assertEqual(erro.exception.code, 404)
 
     def test_filme(self) -> None:
         corpo = self._json("/stream/movie/tt0133093.json")
