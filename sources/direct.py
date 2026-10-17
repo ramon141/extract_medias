@@ -1,7 +1,8 @@
-"""Caminho rápido: pega o link do vídeo direto do HTML do player, sem navegador.
+"""Caminho rápido: pega o link do vídeo por HTTP, sem navegador.
 
-Só vale para players que escrevem o link na própria página. Os demais
-(ex.: Blogger, que exige um clique) continuam no resolver com Playwright.
+Vale para players que entregam o link na própria página ou por uma chamada
+simples. Os demais (Blogger, que exige um clique; Abyss, atrás de desafio do
+Cloudflare; VidSrc, que decifra no navegador) continuam no resolver com Playwright.
 """
 
 import json
@@ -28,6 +29,11 @@ _HEADERS = {
 }
 
 _WATCHPLAY_URL = re.compile(r'createMyPlayer\(\{.*?\burl:("(?:[^"\\]|\\.)*")', re.DOTALL)
+# o JSON do FirePlayer traz um campo "ck" com escapes inválidos: lemos só os campos úteis
+_FIREPLAYER_CAMPO = r'"{campo}":"([^"]+)"'
+
+# conexões reaproveitadas entre pedidos (o addon fica no ar), sem repetir o TLS
+_sessao = requests.Session()
 
 
 def extrair_url_watchplay(html: str) -> str | None:
@@ -39,14 +45,46 @@ def extrair_url_watchplay(html: str) -> str | None:
     return url if isinstance(url, str) and url.startswith("http") else None
 
 
-def url_direta(option: ServerOption, referer: str, timeout: float = 15.0) -> str | None:
-    """Link do vídeo sem abrir navegador; None quando o player não permite."""
-    host = urlparse(option.embed_url).netloc.lower()
-    if not host.endswith("watchplay.shop"):
-        return None
+def extrair_url_fireplayer(resposta: str) -> str | None:
+    """Link HLS assinado (ou o master simples) da resposta do FirePlayer."""
+    for campo in ("securedLink", "videoSource"):
+        achado = re.search(_FIREPLAYER_CAMPO.format(campo=campo), resposta)
+        if achado:
+            return achado.group(1).replace("\\/", "/")
+    return None
+
+
+def _watchplay(option: ServerOption, referer: str, timeout: float) -> str | None:
     headers = dict(_HEADERS)
     if referer:
         headers["Referer"] = referer
-    resposta = requests.get(option.embed_url, headers=headers, timeout=timeout)
+    resposta = _sessao.get(option.embed_url, headers=headers, timeout=timeout)
     resposta.raise_for_status()
     return extrair_url_watchplay(resposta.text)
+
+
+def _embedplayer(option: ServerOption, referer: str, timeout: float) -> str | None:
+    """EmbedPlayer (FirePlayer): POST em /player/index.php devolve o link do vídeo."""
+    partes = urlparse(option.embed_url)
+    identificador = partes.path.rstrip("/").rsplit("/", 1)[-1]
+    if not identificador:
+        return None
+    resposta = _sessao.post(
+        f"{partes.scheme}://{partes.netloc}/player/index.php",
+        params={"data": identificador, "do": "getVideo"},
+        data={"hash": identificador, "r": referer},
+        headers={"User-Agent": _UA, "Referer": option.embed_url, "X-Requested-With": "XMLHttpRequest"},
+        timeout=timeout,
+    )
+    resposta.raise_for_status()
+    return extrair_url_fireplayer(resposta.text)
+
+
+def url_direta(option: ServerOption, referer: str, timeout: float = 15.0) -> str | None:
+    """Link do vídeo sem abrir navegador; None quando o player não permite."""
+    host = urlparse(option.embed_url).netloc.lower()
+    if host.endswith("watchplay.shop"):
+        return _watchplay(option, referer, timeout)
+    if host.startswith("embedplayer") and "/video/" in option.embed_url:
+        return _embedplayer(option, referer, timeout)
+    return None

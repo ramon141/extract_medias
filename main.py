@@ -24,7 +24,7 @@ import sys
 from dataclasses import asdict
 from enum import Enum
 
-from sources.embed_urls import forcar_serie, parse_embed_url
+from sources.embed_urls import EmbedTarget, forcar_serie, parse_embed_url
 from sources.errors import SourceError
 from sources.models import Media, MediaKind
 from sources.myembed import MyEmbedSource
@@ -52,6 +52,13 @@ def extrair(args: argparse.Namespace) -> Media:
         alvo = forcar_serie(alvo)
 
     resolver = PlaywrightServerResolver(verify=not args.sem_verificar)
+    try:
+        return _extrair_com(resolver, args, alvo)
+    finally:
+        resolver.fechar()
+
+
+def _extrair_com(resolver: PlaywrightServerResolver, args: argparse.Namespace, alvo: EmbedTarget) -> Media:
     myembed = MyEmbedSource(resolver=resolver)
     registry = SourceRegistry()
     registry.register(myembed)

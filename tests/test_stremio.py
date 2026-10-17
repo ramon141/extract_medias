@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -66,6 +67,68 @@ class ServidorTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as erro:
             _ = self._json("/nada")
         self.assertEqual(erro.exception.code, 404)
+
+
+class LentoFake(Extrator):
+    """Um id demora (como uma série no navegador); os outros respondem na hora."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chamadas: list[str] = []
+        self.liberar_lento = threading.Event()
+
+    def extrair(self, tipo: str, identificador: str) -> list[StreamLink]:
+        self.chamadas.append(identificador)
+        if identificador == "tt_lento":
+            _ = self.liberar_lento.wait(timeout=5)
+        return [LINK]
+
+
+class ConcorrenciaTest(unittest.TestCase):
+    def test_pedido_lento_nao_segura_os_outros(self) -> None:
+        extrator = LentoFake()
+        lento = threading.Thread(target=extrator.links, args=("series", "tt_lento"))
+        lento.start()
+        time.sleep(0.1)  # o lento já está dentro da extração
+
+        inicio = time.monotonic()
+        for identificador in ("tt1", "tt2", "tt3"):
+            self.assertEqual(extrator.links("movie", identificador), [LINK])
+        self.assertLess(time.monotonic() - inicio, 1.0)
+
+        extrator.liberar_lento.set()
+        lento.join(timeout=5)
+
+    def test_pedidos_iguais_ao_mesmo_tempo_extraem_uma_vez(self) -> None:
+        extrator = LentoFake()
+        respostas: list[list[StreamLink]] = []
+        trava = threading.Lock()
+
+        def pedir() -> None:
+            resposta = extrator.links("series", "tt_lento")
+            with trava:
+                respostas.append(resposta)
+
+        pedidos = [threading.Thread(target=pedir) for _ in range(4)]
+        for pedido in pedidos:
+            pedido.start()
+        time.sleep(0.2)
+        extrator.liberar_lento.set()
+        for pedido in pedidos:
+            pedido.join(timeout=5)
+
+        self.assertEqual(extrator.chamadas, ["tt_lento"])
+        self.assertEqual(respostas, [[LINK]] * 4)
+
+    def test_falha_chega_a_todos_e_nao_fica_presa(self) -> None:
+        class Falha(Extrator):
+            def extrair(self, tipo: str, identificador: str) -> list[StreamLink]:
+                raise RuntimeError("quebrou")
+
+        extrator = Falha()
+        for _ in range(2):  # segunda vez prova que o pedido pendente foi limpo
+            with self.assertRaises(RuntimeError):
+                _ = extrator.links("movie", "tt1")
 
 
 class FormatoStremioTest(unittest.TestCase):

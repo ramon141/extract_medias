@@ -15,10 +15,13 @@ Players testados e formatos observados:
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import requests
 
@@ -41,6 +44,8 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 _VIEWPORT: ViewportSize = {"width": 1280, "height": 720}
 
@@ -143,7 +148,7 @@ def _guess_resolution(url: str) -> str:
 
 
 class _NavegadorSobDemanda:
-    """Sobe o Chromium só na primeira vez que alguém pedir o contexto."""
+    """Sobe o Chromium só na primeira vez que alguém pedir o contexto e o mantém aberto."""
 
     def __init__(self) -> None:
         self._playwright: Playwright | None = None
@@ -151,6 +156,9 @@ class _NavegadorSobDemanda:
         self._contexto: BrowserContext | None = None
 
     def contexto(self) -> BrowserContext:
+        if self._browser is not None and not self._browser.is_connected():
+            logger.warning("Chromium caiu; subindo outro")
+            self.fechar()
         if self._contexto is None:
             from playwright.sync_api import sync_playwright
 
@@ -164,10 +172,50 @@ class _NavegadorSobDemanda:
         return self._contexto
 
     def fechar(self) -> None:
-        if self._browser is not None:
-            self._browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
+        try:
+            if self._browser is not None:
+                self._browser.close()
+            if self._playwright is not None:
+                self._playwright.stop()
+        except Exception as erro:  # noqa: BLE001 - já estava caído
+            logger.debug("fechar navegador: %s", erro)
+        self._playwright = self._browser = self._contexto = None
+
+
+class _Trabalhador:
+    """Um Chromium preso à sua própria thread (a API síncrona do Playwright exige isso)."""
+
+    def __init__(self) -> None:
+        self._thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="navegador")
+        self._navegador = _NavegadorSobDemanda()
+
+    def executar(self, trabalho: Callable[[BrowserContext], T]) -> T:
+        return self._thread.submit(lambda: trabalho(self._navegador.contexto())).result()
+
+    def fechar(self) -> None:
+        _ = self._thread.submit(self._navegador.fechar).result()
+        self._thread.shutdown()
+
+
+class _PoolNavegadores:
+    """Alguns Chromium abertos: pedidos que precisam de navegador não esperam uns pelos outros."""
+
+    def __init__(self, tamanho: int) -> None:
+        self._todos = [_Trabalhador() for _ in range(tamanho)]
+        self._livres: queue.Queue[_Trabalhador] = queue.Queue()
+        for trabalhador in self._todos:
+            self._livres.put(trabalhador)
+
+    def executar(self, trabalho: Callable[[BrowserContext], T]) -> T:
+        trabalhador = self._livres.get()
+        try:
+            return trabalhador.executar(trabalho)
+        finally:
+            self._livres.put(trabalhador)
+
+    def fechar(self) -> None:
+        for trabalhador in self._todos:
+            trabalhador.fechar()
 
 
 class PlaywrightServerResolver:
@@ -176,8 +224,9 @@ class PlaywrightServerResolver:
     def __init__(
         self,
         timeout_ms: int = 25_000,
-        click_after_ms: int = 8_000,
-        max_cliques: int = 3,
+        click_after_ms: int = 3_000,
+        max_cliques: int = 8,
+        navegadores: int = 3,
         stop_after_first_stream: bool = True,
         verify: bool = True,
         verify_timeout: float = 15.0,
@@ -186,6 +235,7 @@ class PlaywrightServerResolver:
         self.timeout_ms = timeout_ms
         self.click_after_ms = click_after_ms
         self.max_cliques = max_cliques
+        self._pool = _PoolNavegadores(navegadores)
         self.stop_after_first_stream = stop_after_first_stream
         self.verify = verify
         self.verify_timeout = verify_timeout
@@ -194,29 +244,41 @@ class PlaywrightServerResolver:
     def resolve(self, options: list[ServerOption], referer: str = "") -> list[ServerResult]:
         """Resolve os servers em ordem; devolve um resultado por server tentado.
 
-        Tenta primeiro o caminho direto (HTTP); o navegador só abre se for preciso.
+        Os caminhos diretos (HTTP) de todos os servers rodam juntos. O navegador só
+        entra, na ordem, para quem não tem caminho direto ou falhou.
         """
+        diretos = self._diretos_em_paralelo(options, referer)
         resultados: list[ServerResult] = []
-        navegador = _NavegadorSobDemanda()
-        try:
-            for option in options:
-                result = self._resolve_direto(option, referer)
-                if not result.streams:
-                    result = self._resolve_option(navegador.contexto(), option, referer)
+        for option, direto in zip(options, diretos):
+            if direto.streams:
+                result = direto  # link recém-assinado pelo próprio player: dispensa verificação
+            else:
+                result = self._pool.executar(
+                    lambda contexto, o=option: self._resolve_option(contexto, o, referer)
+                )
                 if self.verify:
                     self._verify_streams(result)
-                resultados.append(result)
-                if result.streams and self.stop_after_first_stream:
-                    break
-        finally:
-            navegador.fechar()
+            resultados.append(result)
+            if result.streams and self.stop_after_first_stream:
+                break
         return resultados
+
+    def fechar(self) -> None:
+        """Fecha os navegadores abertos (chame ao encerrar o programa)."""
+        self._pool.fechar()
+
+    def _diretos_em_paralelo(self, options: list[ServerOption], referer: str) -> list[ServerResult]:
+        if not options:
+            return []
+        with ThreadPoolExecutor(max_workers=len(options)) as pool:
+            futuros = [pool.submit(self._resolve_direto, option, referer) for option in options]
+            return [futuro.result() for futuro in futuros]
 
     def _resolve_direto(self, option: ServerOption, referer: str) -> ServerResult:
         """Caminho rápido sem navegador; resultado vazio se o player não permitir."""
         resultado = ServerResult(option=option)
         try:
-            url = url_direta(option, referer, timeout=self.verify_timeout)
+            url = url_direta(option, referer, timeout=8.0)
         except requests.RequestException as erro:
             logger.debug("caminho direto falhou [%s]: %s", option.id, erro)
             return resultado
@@ -254,12 +316,13 @@ class PlaywrightServerResolver:
             inicio = time.monotonic()
             tentativas_click = 0
             while (time.monotonic() - inicio) * 1000 < self.timeout_ms:
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(500)
                 if streams:
-                    page.wait_for_timeout(1000)  # deixa registar duplicados/qualidades
+                    page.wait_for_timeout(500)  # deixa registar duplicados/qualidades
                     break
                 decorrido_ms = (time.monotonic() - inicio) * 1000
-                if decorrido_ms >= self.click_after_ms and tentativas_click < self.max_cliques:
+                proximo_clique_ms = self.click_after_ms + tentativas_click * 1000
+                if decorrido_ms >= proximo_clique_ms and tentativas_click < self.max_cliques:
                     self._click_play(page)
                     tentativas_click += 1
         except Exception as erro:  # noqa: BLE001 - resolver tolera falha por server

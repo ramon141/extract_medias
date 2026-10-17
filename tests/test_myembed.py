@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from sources.base import Source
+from sources.errors import SourceError
 from sources.models import MediaKind, Season
 from sources.myembed import MyEmbedSource
 from sources.playerflix import PlayerFlixClient, ServerOption, TitleInfo
@@ -95,6 +96,19 @@ class FilmeTest(unittest.TestCase):
         media = fonte.fetch("tt22084616")
 
         self.assertEqual(media.links, [])
+
+    def test_playerflix_desconhece_titulo_ainda_tenta_vidsrc(self) -> None:
+        class ClienteQueNaoConhece(ClienteFake):
+            def filme(self, imdb_id: str) -> tuple[TitleInfo, list[ServerOption]]:
+                raise SourceError("título desconhecido")
+
+        resolver = ResolverFake(mapa={"vidsrc": ["https://cdn/master.m3u8"]})
+        fonte = MyEmbedSource(client=ClienteQueNaoConhece(), resolver=resolver)
+
+        media = fonte.fetch("tt0098904")
+
+        self.assertEqual([link.url for link in media.links], ["https://cdn/master.m3u8"])
+        self.assertEqual(media.links[0].label, "VidSrc")
 
     def test_url_completa_aceita_tambem(self) -> None:
         cliente = ClienteFake(filme=(INFO_FILME, []))

@@ -15,6 +15,7 @@ import logging
 import re
 import threading
 import time
+from concurrent.futures import Future
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
@@ -42,12 +43,16 @@ _ID_EPISODIO = re.compile(r"^(tt\d+):(\d+):(\d+)$")
 
 
 class Extrator:
-    """Extrai os links de um id do Stremio, um pedido por vez (o navegador não é paralelo)."""
+    """Extrai os links de um id do Stremio; pedidos diferentes andam em paralelo.
+
+    Pedidos iguais ao mesmo tempo (o Stremio repete) esperam uma única extração.
+    """
 
     def __init__(self, fonte: MyEmbedSource | None = None) -> None:
         self.fonte = fonte or MyEmbedSource()
-        self._trava = threading.Lock()
+        self._trava = threading.Lock()  # só protege os dicionários abaixo, nunca a extração
         self._cache: dict[str, tuple[float, list[StreamLink]]] = {}
+        self._em_andamento: dict[str, Future[list[StreamLink]]] = {}
 
     def links(self, tipo: str, identificador: str) -> list[StreamLink]:
         chave = f"{tipo}/{identificador}"
@@ -55,10 +60,28 @@ class Extrator:
             guardado = self._cache.get(chave)
             if guardado and time.monotonic() - guardado[0] < CACHE_TTL:
                 return guardado[1]
+            espera = self._em_andamento.get(chave)
+            dono = espera is None
+            if espera is None:
+                espera = self._em_andamento[chave] = Future()
+        if not dono:
+            return espera.result()
+        try:
             encontrados = self.extrair(tipo, identificador)
             if encontrados:  # falha não fica em cache
-                self._cache[chave] = (time.monotonic(), encontrados)
+                with self._trava:
+                    self._cache[chave] = (time.monotonic(), encontrados)
+            espera.set_result(encontrados)
             return encontrados
+        except BaseException as erro:
+            espera.set_exception(erro)
+            raise
+        finally:
+            with self._trava:
+                del self._em_andamento[chave]
+
+    def fechar(self) -> None:
+        self.fonte.resolver.fechar()
 
     def extrair(self, tipo: str, identificador: str) -> list[StreamLink]:
         if tipo == "movie":
@@ -136,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     host: str = args.host
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    servidor = ThreadingHTTPServer((host, porta), criar_handler(Extrator()))
+    extrator = Extrator()
+    servidor = ThreadingHTTPServer((host, porta), criar_handler(extrator))
     print(f"Addon no ar: http://{host}:{porta}/manifest.json")
     try:
         servidor.serve_forever()
@@ -144,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         servidor.server_close()
+        extrator.fechar()
     return 0
 
 

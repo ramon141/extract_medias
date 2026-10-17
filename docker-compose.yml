@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     init: true # encerra os processos do Chromium que ficarem órfãos
     shm_size: "1gb" # o Chromium trava com a memória compartilhada padrão (64 MB)
-    mem_limit: 2g # evita o Chromium inflar a VM do Docker Desktop
+    mem_limit: 3g # até 3 Chromium abertos ao mesmo tempo; evita inflar a VM do Docker Desktop
     tmpfs:
       - /tmp # perfis temporários do Chromium em RAM, sem passar pelo disco da VM
     # sem volumes de código: bind mount no macOS (VirtioFS) é lento; imagem já contém tudo

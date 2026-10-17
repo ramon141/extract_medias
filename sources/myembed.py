@@ -12,13 +12,14 @@ Aceita também a URL/iframe completa no lugar do ID.
 """
 
 import logging
+from collections.abc import Callable
 from typing import ClassVar
 
 from sources.base import Source
 from sources.embed_urls import EmbedTarget, parse_embed_url
 from sources.errors import SourceError
 from sources.models import Episode, Media, MediaKind, Season, StreamLink
-from sources.playerflix import PlayerFlixClient, ServerOption
+from sources.playerflix import PlayerFlixClient, ServerOption, TitleInfo
 from sources.resolver import PlaywrightServerResolver, links_do_resultado
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ class MyEmbedSource(Source):
         alvo: EmbedTarget = parse_embed_url(external_id)
         if alvo.kind is not None and alvo.kind is not MediaKind.MOVIE:
             raise SourceError("Esse alvo é de série: use fetch_serie().")
-        info, options = self.client.filme(alvo.external_id)
+        info, options = self._consultar(lambda: self.client.filme(alvo.external_id))
         options = [*options, _vidsrc(f"movie/{alvo.external_id}")]
         return Media(
             external_id=alvo.external_id,
@@ -68,7 +69,9 @@ class MyEmbedSource(Source):
     ) -> Media:
         """Série por TMDB ID: episódio específico ou catálogo completo."""
         if season is not None and episode is not None:
-            info, options = self.client.temporada_episodio(external_id, season, episode)
+            info, options = self._consultar(
+                lambda: self.client.temporada_episodio(external_id, season, episode)
+            )
             options = [*options, _vidsrc(f"tv/{external_id}/{season}/{episode}")]
             links = self._ligar(
                 options,
@@ -94,6 +97,16 @@ class MyEmbedSource(Source):
             release_date=info.release_date,
             seasons=sorted(temporadas.values(), key=lambda s: s.number),
         )
+
+    def _consultar(
+        self, consulta: Callable[[], tuple[TitleInfo, list[ServerOption]]]
+    ) -> tuple[TitleInfo, list[ServerOption]]:
+        """O playerflix nem conhece todo título; sem ele ainda dá para tentar os servidores extras."""
+        try:
+            return consulta()
+        except SourceError as erro:
+            logger.warning("playerflix não listou servidores (%s); tentando só os extras", erro)
+            return TitleInfo(title=""), []
 
     def _ligar(self, options: list[ServerOption], referer: str) -> list[StreamLink]:
         """Resolve os servers para mídia real; sem vídeo, devolve lista vazia.
