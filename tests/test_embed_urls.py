@@ -64,7 +64,14 @@ class ParseUrlTest(unittest.TestCase):
         with self.assertRaises(SourceError):
             parse_embed_url("https://myembed.biz/anime/tt22084616")
 
-    def test_filme_sem_imdb_levanta_erro(self) -> None:
+    def test_url_serie_por_imdb(self) -> None:
+        alvo = parse_embed_url("https://myembed.biz/serie/tt0096697/1/1")
+        self.assertEqual(alvo.external_id, "tt0096697")
+        self.assertEqual(alvo.kind, MediaKind.SERIES)
+        self.assertEqual(alvo.season, 1)
+        self.assertEqual(alvo.episode, 1)
+
+    def test_url_filme_sem_imdb_levanta_erro(self) -> None:
         with self.assertRaises(SourceError):
             parse_embed_url("https://myembed.biz/filme/30984")
 

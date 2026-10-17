@@ -23,6 +23,13 @@ from sources.resolver import PlaywrightServerResolver, links_do_resultado
 
 logger = logging.getLogger(__name__)
 
+_VIDSRC = "https://vidsrc.to/embed"
+
+
+def _vidsrc(caminho: str) -> ServerOption:
+    """Servidor extra, tentado depois dos que o playerflix lista."""
+    return ServerOption(id="vidsrc", label="VidSrc", embed_url=f"{_VIDSRC}/{caminho}")
+
 
 class MyEmbedSource(Source):
     name: ClassVar[str] = "myembed"
@@ -41,6 +48,7 @@ class MyEmbedSource(Source):
         if alvo.kind is not None and alvo.kind is not MediaKind.MOVIE:
             raise SourceError("Esse alvo é de série: use fetch_serie().")
         info, options = self.client.filme(alvo.external_id)
+        options = [*options, _vidsrc(f"movie/{alvo.external_id}")]
         return Media(
             external_id=alvo.external_id,
             title=info.title,
@@ -61,6 +69,7 @@ class MyEmbedSource(Source):
         """Série por TMDB ID: episódio específico ou catálogo completo."""
         if season is not None and episode is not None:
             info, options = self.client.temporada_episodio(external_id, season, episode)
+            options = [*options, _vidsrc(f"tv/{external_id}/{season}/{episode}")]
             links = self._ligar(
                 options,
                 referer=f"https://playerflix.ink/serie/{external_id}/{season}/{episode}",

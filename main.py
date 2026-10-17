@@ -3,6 +3,7 @@
 Exemplos:
     # o iframe que o usuário passar, direto:
     python main.py '<iframe src="https://myembed.biz/filme/tt22084616" ...></iframe>'
+    python main.py '<iframe src="https://myembed.biz/serie/tt0096697/1/1" ...></iframe>'
 
     # ou por URL / ID
     python main.py https://myembed.biz/filme/tt22084616

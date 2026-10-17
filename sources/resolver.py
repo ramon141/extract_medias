@@ -22,6 +22,11 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from sources.captcha import (
+    CaptchaError,
+    CapMonsterClient,
+    capturar_desafio_turnstile,
+)
 from sources.direct import url_direta
 from sources.playerflix import ServerOption
 
@@ -65,6 +70,40 @@ _PLAY_SELECTORS = (
     "video",
     "button",
 )
+
+_PADRAO_CALLBACK = re.compile(r"callback\s*:\s*window\.([A-Za-z_]\w*)")
+
+# Token do Turnstile resolvido fora do browser: precisamos entregar à página.
+# 1º caminho: o callback que a própria página registra (turnstile.render …
+# callback: window.<nome>) recebe o token e faz o form.submit() dela.
+# 2º caminho: sem callback, setamos o input cf-turnstile-response e submetemos.
+_JS_INJECAO_TOKEN = """
+(token) => {
+    const fn = window[{callback}];
+    if (typeof fn === 'function') {
+        fn(token);
+        return 'callback';
+    }
+    const form = document.querySelector('form');
+    if (!form) return 'nada';
+    let input = form.querySelector('input[name="cf-turnstile-response"]');
+    if (!input) {
+        input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'cf-turnstile-response';
+        form.appendChild(input);
+    }
+    input.value = token;
+    form.submit();
+    return 'form';
+}
+"""
+
+
+def _callback_da_pagina(html: str) -> str:
+    """Nome do callback registrado na chamada turnstile.render()."""
+    encontrado = _PADRAO_CALLBACK.search(html)
+    return f"'{encontrado.group(1)}'" if encontrado else "'cloudflareEmbedCaptchaPassed'"
 
 _DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -142,6 +181,7 @@ class PlaywrightServerResolver:
         stop_after_first_stream: bool = True,
         verify: bool = True,
         verify_timeout: float = 15.0,
+        captcha: CapMonsterClient | None = None,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.click_after_ms = click_after_ms
@@ -149,6 +189,7 @@ class PlaywrightServerResolver:
         self.stop_after_first_stream = stop_after_first_stream
         self.verify = verify
         self.verify_timeout = verify_timeout
+        self.capmonster = captcha or CapMonsterClient()
 
     def resolve(self, options: list[ServerOption], referer: str = "") -> list[ServerResult]:
         """Resolve os servers em ordem; devolve um resultado por server tentado.
@@ -162,15 +203,13 @@ class PlaywrightServerResolver:
                 result = self._resolve_direto(option, referer)
                 if not result.streams:
                     result = self._resolve_option(navegador.contexto(), option, referer)
+                if self.verify:
+                    self._verify_streams(result)
                 resultados.append(result)
                 if result.streams and self.stop_after_first_stream:
                     break
         finally:
             navegador.fechar()
-
-        if self.verify:
-            for result in resultados:
-                self._verify_streams(result)
         return resultados
 
     def _resolve_direto(self, option: ServerOption, referer: str) -> ServerResult:
@@ -210,6 +249,8 @@ class PlaywrightServerResolver:
                 timeout=self.timeout_ms,
                 referer=referer or None,
             )
+            if self._captcha_na_pagina(page, resultado):
+                logger.info("captcha detectado [%s]; resolvendo via CapMonster…", option.id)
             inicio = time.monotonic()
             tentativas_click = 0
             while (time.monotonic() - inicio) * 1000 < self.timeout_ms:
@@ -230,6 +271,38 @@ class PlaywrightServerResolver:
                 pass
         resultado.streams = list(streams)
         return resultado
+
+    def _captcha_na_pagina(self, page: Page, resultado: ServerResult) -> bool:
+        """Verificação Turnstile na frente do player: resolve se der."""
+        html = page.content()
+        desafio = capturar_desafio_turnstile(html, page.url)
+        if desafio is None:
+            return False
+        if not self.capmonster.configurado:
+            resultado.avisos.append(
+                "captcha Turnstile detectado, mas CAPMONSTER_CLIENT_KEY não está definida no .env — não há como obter o token."
+            )
+            return False
+        try:
+            token = self.capmonster.resolver_turnstile(desafio)
+        except CaptchaError as erro:
+            resultado.avisos.append(f"captcha: {erro}")
+            return False
+        if not self._injetar_token(page, html, token):
+            resultado.avisos.append("captcha: callback do widget não encontrado para o token")
+            return False
+        page.wait_for_timeout(4000)  # o form.submit() navega para o player
+        return True
+
+    def _injetar_token(self, page: Page, html: str, token: str) -> bool:
+        """Entrega o token à página: callback ou form, como o Turnstile faria."""
+        callback = _callback_da_pagina(html)
+        programinha = _JS_INJECAO_TOKEN.format(callback=callback)
+        saida = page.evaluate(programinha, token)
+        if not isinstance(saida, str):
+            return False
+        logger.debug("token injetado via %s", saida)
+        return saida in ("callback", "form")
 
     def _click_play(self, page: Page) -> None:
         """Tenta clicar em botões de play; último recurso: centro do player."""

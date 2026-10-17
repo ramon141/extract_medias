@@ -5,6 +5,7 @@ Aceita:
     - https://myembed.biz/filme/tt22084616
     - https://myembed.biz/serie/30984            (catálogo)
     - https://myembed.biz/serie/30984/1/1        (episódio direto)
+    - https://myembed.biz/serie/tt0096697/1/1    (série por IMDb ID)
     - https://playerflix.ink/filme/tt22084616    (o player real por trás do myembed)
     - ID cru: "tt22084616" (IMDb = filme) ou "30984" (TMDB = série)
 """
@@ -75,10 +76,10 @@ def _parse_url(url: str) -> EmbedTarget:
             raise SourceError(f"URL de filme deve usar IMDb ID (tt…): {url}")
         return EmbedTarget(external_id=identificador, kind=MediaKind.MOVIE)
 
-    # /serie/30984/1/1  ou /tv/30984/1/1
+    # /serie/30984/1/1  ou /serie/tt0096697/1/1  (TMDB numérico ou IMDb tt…)
     if primeiro in ("serie", "series", "tv"):
-        if not identificador.isdigit():
-            raise SourceError(f"URL de série deve usar TMDB ID numérico: {url}")
+        if not (identificador.isdigit() or re.fullmatch(r"tt\d+", identificador)):
+            raise SourceError(f"URL de série deve usar TMDB numérico ou IMDb ID (tt…): {url}")
         temporada, episodio = _parse_temporada_episodio(segmentos[2:], url)
         return EmbedTarget(
             external_id=identificador,
