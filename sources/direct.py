@@ -32,6 +32,12 @@ _WATCHPLAY_URL = re.compile(r'createMyPlayer\(\{.*?\burl:("(?:[^"\\]|\\.)*")', r
 # o JSON do FirePlayer traz um campo "ck" com escapes inválidos: lemos só os campos úteis
 _FIREPLAYER_CAMPO = r'"{campo}":"([^"]+)"'
 
+_BLOGGER_TOKEN = re.compile(r"[?&]token=([\w-]+)")
+_BLOGGER_VIDEO = re.compile(r"https://[^\"\\\s]*googlevideo\.com/videoplayback[^\"\\\s]*")
+_BLOGGER_ITAG = re.compile(r"[?&]itag=(\d+)")
+# itags do Google: 37=1080p, 22=720p, 59=480p, 18=360p
+_BLOGGER_ORDEM = {37: 4, 22: 3, 59: 2, 18: 1}
+
 # conexões reaproveitadas entre pedidos (o addon fica no ar), sem repetir o TLS
 _sessao = requests.Session()
 
@@ -80,6 +86,44 @@ def _embedplayer(option: ServerOption, referer: str, timeout: float) -> str | No
     return extrair_url_fireplayer(resposta.text)
 
 
+def extrair_url_blogger(resposta: str) -> str | None:
+    """Link de maior qualidade na resposta de dados do player do Blogger."""
+    texto = resposta.replace("\\\\u003d", "=").replace("\\\\u0026", "&")
+    texto = texto.replace("\\u003d", "=").replace("\\u0026", "&").replace("\\/", "/")
+
+    def qualidade(url: str) -> int:
+        itag = _BLOGGER_ITAG.search(url)
+        return _BLOGGER_ORDEM.get(int(itag.group(1)), 0) if itag else 0
+
+    links = _BLOGGER_VIDEO.findall(texto)
+    return max(links, key=qualidade) if links else None
+
+
+def _blogger(option: ServerOption, referer: str, timeout: float) -> str | None:
+    """Blogger: a página só traz a chave da sessão; o link vem de uma chamada de dados (sem navegador)."""
+    token = _BLOGGER_TOKEN.search(option.embed_url)
+    if not token:
+        return None
+    pagina = _sessao.get(
+        option.embed_url, headers={"User-Agent": _UA, "Referer": referer or "https://playerflix.ink/"}, timeout=timeout
+    )
+    pagina.raise_for_status()
+    sessao = re.search(r'"FdrFJe":"(-?\d+)"', pagina.text)
+    versao = re.search(r'"cfb2h":"([^"]+)"', pagina.text)
+    if not sessao or not versao:
+        return None
+    pedido = json.dumps([[["WcwnYd", json.dumps([token.group(1), None, 0]), None, "generic"]]], separators=(",", ":"))
+    resposta = _sessao.post(
+        "https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute",
+        params={"rpcids": "WcwnYd", "source-path": "/video.g", "f.sid": sessao.group(1), "bl": versao.group(1), "hl": "pt-BR", "rt": "c"},
+        data={"f.req": pedido},
+        headers={"User-Agent": _UA, "Referer": "https://www.blogger.com/", "X-Same-Domain": "1"},
+        timeout=timeout,
+    )
+    resposta.raise_for_status()
+    return extrair_url_blogger(resposta.text)
+
+
 def resposta_direta_e_definitiva(option: ServerOption) -> bool:
     """WatchPlay escreve o link na página: se ela não tem, o navegador também não acharia.
 
@@ -89,7 +133,7 @@ def resposta_direta_e_definitiva(option: ServerOption) -> bool:
 
 
 def tem_caminho_direto(option: ServerOption) -> bool:
-    """True para os players resolvidos só por HTTP (sem navegador)."""
+    """True para os players por HTTP cujo link serve a qualquer rede (o do Blogger prende à rede de quem pediu)."""
     host = urlparse(option.embed_url).netloc.lower()
     return host.endswith("watchplay.shop") or (host.startswith("embedplayer") and "/video/" in option.embed_url)
 
@@ -101,4 +145,6 @@ def url_direta(option: ServerOption, referer: str, timeout: float = 15.0) -> str
         return _watchplay(option, referer, timeout)
     if host.startswith("embedplayer") and "/video/" in option.embed_url:
         return _embedplayer(option, referer, timeout)
+    if host.endswith("blogger.com") and "token=" in option.embed_url:
+        return _blogger(option, referer, timeout)
     return None
