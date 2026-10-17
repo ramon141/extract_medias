@@ -12,3 +12,5 @@ services:
     environment:
       # o Coolify gera/aplica o domínio e roteia para a porta 7000 do container
       - SERVICE_FQDN_ADDON_7000
+      # trecho secreto do endereço: o addon só responde em /<ADDON_TOKEN>/... (definido no Coolify)
+      - ADDON_TOKEN=${ADDON_TOKEN:?defina ADDON_TOKEN nas variáveis de ambiente do Coolify}
