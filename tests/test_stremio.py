@@ -8,7 +8,7 @@ from urllib.request import urlopen
 
 from sources.models import StreamLink
 from sources.resolver import USER_AGENT
-from stremio import MANIFEST, Extrator, criar_handler, para_stremio
+from stremio import MANIFEST, Extrator, criar_handler, para_stremio, sem_token
 
 
 class ExtratorFake(Extrator):
@@ -68,6 +68,53 @@ class ServidorTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as erro:
             _ = self._json("/nada")
         self.assertEqual(erro.exception.code, 404)
+
+
+class TokenTest(unittest.TestCase):
+    def test_sem_token_configurado_nada_muda(self) -> None:
+        self.assertEqual(sem_token("/manifest.json", ""), "/manifest.json")
+
+    def test_token_certo_e_removido_do_caminho(self) -> None:
+        self.assertEqual(sem_token("/segredo/stream/movie/tt1.json", "segredo"), "/stream/movie/tt1.json")
+        self.assertEqual(sem_token("/segredo/manifest.json", "segredo"), "/manifest.json")
+
+    def test_token_errado_ou_ausente_e_recusado(self) -> None:
+        self.assertIsNone(sem_token("/manifest.json", "segredo"))
+        self.assertIsNone(sem_token("/errado/manifest.json", "segredo"))
+        self.assertIsNone(sem_token("/segredo", "segredo-maior"))
+
+    def test_health_fica_aberto(self) -> None:
+        self.assertEqual(sem_token("/health", "segredo"), "/health")
+
+
+class ServidorComTokenTest(unittest.TestCase):
+    def setUp(self) -> None:
+        extrator = ExtratorFake({"movie/tt0133093": [LINK]})
+        self.servidor = ThreadingHTTPServer(("127.0.0.1", 0), criar_handler(extrator, "segredo"))
+        threading.Thread(target=self.servidor.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.servidor.server_address[1]}"
+
+    def tearDown(self) -> None:
+        self.servidor.shutdown()
+        self.servidor.server_close()
+
+    def _status(self, caminho: str) -> int:
+        try:
+            with urlopen(self.base + caminho, timeout=5) as resposta:
+                return resposta.status
+        except HTTPError as erro:
+            return erro.code
+
+    def test_sem_segredo_nao_acessa_nada(self) -> None:
+        for caminho in ("/manifest.json", "/stream/movie/tt0133093.json", "/errado/manifest.json"):
+            self.assertEqual(self._status(caminho), 404, caminho)
+
+    def test_com_segredo_acessa(self) -> None:
+        self.assertEqual(self._status("/segredo/manifest.json"), 200)
+        self.assertEqual(self._status("/segredo/stream/movie/tt0133093.json"), 200)
+
+    def test_health_responde_sem_segredo(self) -> None:
+        self.assertEqual(self._status("/health"), 200)
 
 
 class LentoFake(Extrator):

@@ -1,0 +1,14 @@
+# Versão para o Coolify (Build Pack "Docker Compose"; "Docker Compose Location": /docker-compose.coolify.yaml).
+# Sem "ports": quem publica o addon é o Traefik do Coolify, pelo domínio configurado no recurso.
+services:
+  addon:
+    build: .
+    restart: unless-stopped
+    init: true # encerra os processos do Chromium que ficarem órfãos
+    shm_size: "1gb" # o Chromium trava com a memória compartilhada padrão (64 MB)
+    mem_limit: 3g # até 3 Chromium abertos ao mesmo tempo
+    tmpfs:
+      - /tmp # perfis temporários do Chromium em RAM
+    environment:
+      # o Coolify gera/aplica o domínio e roteia para a porta 7000 do container
+      - SERVICE_FQDN_ADDON_7000

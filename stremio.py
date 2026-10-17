@@ -2,6 +2,7 @@
 
     python stremio.py                 # http://127.0.0.1:7100/manifest.json
     python stremio.py --porta 8000
+    ADDON_TOKEN=segredo python stremio.py   # addon só responde em /segredo/manifest.json
 
 No Stremio: Addons → "Add addon" → cole a URL do manifest.json.
 O id vem do Stremio no formato IMDb: filme "tt0133093", episódio "tt0096697:1:1".
@@ -10,8 +11,10 @@ O id vem do Stremio no formato IMDb: filme "tt0133093", episódio "tt0096697:1:1
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -120,7 +123,21 @@ def resposta_stream(extrator: Extrator, tipo: str, identificador: str) -> dict[s
     return {"streams": [para_stremio(link) for link in links]}
 
 
-def criar_handler(extrator: Extrator) -> type[BaseHTTPRequestHandler]:
+def sem_token(caminho: str, token: str) -> str | None:
+    """Tira o trecho secreto do início do caminho; None se faltar ou estiver errado.
+
+    Sem token configurado, o caminho passa como está. /health fica sempre aberto
+    (a checagem de saúde do Docker/Coolify não conhece o segredo) e não expõe nada.
+    """
+    if not token or caminho == "/health":
+        return caminho
+    primeiro, _, resto = caminho.removeprefix("/").partition("/")
+    if not hmac.compare_digest(primeiro.encode(), token.encode()):
+        return None
+    return "/" + resto
+
+
+def criar_handler(extrator: Extrator, token: str = "") -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def _enviar(self, status: int, corpo: dict[str, object] | None) -> None:
             dados = json.dumps(corpo, ensure_ascii=False).encode() if corpo is not None else b""
@@ -136,8 +153,15 @@ def criar_handler(extrator: Extrator) -> type[BaseHTTPRequestHandler]:
             self._enviar(204, None)
 
         def do_GET(self) -> None:  # noqa: N802
-            caminho = unquote(urlparse(self.path).path)
+            bruto = unquote(urlparse(self.path).path)
+            caminho = sem_token(bruto, token)
             try:
+                if caminho == "/health":
+                    self._enviar(200, {"ok": True})
+                    return
+                if caminho is None:  # mesmo 404 de qualquer rota inexistente: não revela que há segredo
+                    self._enviar(404, {"erro": "não encontrado"})
+                    return
                 if caminho == "/manifest.json":
                     self._enviar(200, MANIFEST)
                     return
@@ -147,7 +171,7 @@ def criar_handler(extrator: Extrator) -> type[BaseHTTPRequestHandler]:
                     return
                 self._enviar(404, {"erro": "não encontrado"})
             except (BrokenPipeError, ConnectionResetError):
-                logger.info("Stremio desistiu de esperar %s", caminho)
+                logger.info("Stremio desistiu de esperar")
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             logger.info("%s " + format, self.address_string(), *args)
@@ -164,9 +188,11 @@ def main(argv: list[str] | None = None) -> int:
     host: str = args.host
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    token = os.environ.get("ADDON_TOKEN", "").strip().strip("/")
     extrator = Extrator()
-    servidor = ThreadingHTTPServer((host, porta), criar_handler(extrator))
-    print(f"Addon no ar: http://{host}:{porta}/manifest.json")
+    servidor = ThreadingHTTPServer((host, porta), criar_handler(extrator, token))
+    prefixo = f"/{token}" if token else ""
+    print(f"Addon no ar: http://{host}:{porta}{prefixo}/manifest.json")
     try:
         servidor.serve_forever()
     except KeyboardInterrupt:

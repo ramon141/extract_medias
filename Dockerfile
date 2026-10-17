@@ -25,7 +25,7 @@ USER app
 EXPOSE 7000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7000/manifest.json', timeout=3)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7000/health', timeout=3)"
 
 # addon do Stremio; para o CLI: docker compose run --rm addon python main.py <url>
 CMD ["python", "stremio.py", "--host", "0.0.0.0", "--porta", "7000"]
