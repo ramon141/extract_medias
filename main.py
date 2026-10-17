@@ -100,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ID: {media.external_id}")
     if media.poster:
         print(f"Poster: {media.poster}")
+    if not episode_links:
+        print("Nenhum vídeo encontrado.")
+        return 0
     print(f"Links: {len(episode_links)}")
     for link in episode_links:
         rotulo = f" [{link.label}]" if link.label else ""

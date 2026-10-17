@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from sources.base import Source
-from sources.models import MediaKind, Season, StreamKind
+from sources.models import MediaKind, Season
 from sources.myembed import MyEmbedSource
 from sources.playerflix import PlayerFlixClient, ServerOption, TitleInfo
 from sources.resolver import PlaywrightServerResolver, ServerResult
@@ -76,31 +76,19 @@ class FilmeTest(unittest.TestCase):
         self.assertEqual(link.url, "https://cdn/1080p.m3u8")
         self.assertEqual(link.resolution, "1080p")
         self.assertEqual(link.label, "WatchPlay")
-        self.assertEqual(link.kind, StreamKind.STREAM)
         self.assertEqual(resolver.referer_recebido, "https://playerflix.ink/filme/tt22084616")
 
-    def test_sem_stream_guarda_embeds(self) -> None:
+    def test_sem_stream_devolve_nada(self) -> None:
         cliente = ClienteFake(filme=(INFO_FILME, list(OPTS_FILME)))
         fonte = MyEmbedSource(client=cliente, resolver=ResolverFake())
 
         media = fonte.fetch("tt22084616")
 
-        self.assertEqual(len(media.links), 2)
-        self.assertTrue(all(l.kind is StreamKind.EMBED for l in media.links))
-        self.assertEqual(media.links[0].url, OPTS_FILME[0].embed_url)
-
-    def test_sem_resolver_devolve_embeds_direto(self) -> None:
-        cliente = ClienteFake(filme=(INFO_FILME, list(OPTS_FILME)))
-        fonte = MyEmbedSource(client=cliente, resolver=None, resolve_servers=False)
-
-        media = fonte.fetch("tt22084616")
-
-        self.assertEqual(len(media.links), 2)
-        self.assertTrue(all(l.kind is StreamKind.EMBED for l in media.links))
+        self.assertEqual(media.links, [])
 
     def test_url_completa_aceita_tambem(self) -> None:
         cliente = ClienteFake(filme=(INFO_FILME, []))
-        fonte = MyEmbedSource(client=cliente, resolver=None, resolve_servers=False)
+        fonte = MyEmbedSource(client=cliente, resolver=ResolverFake())
 
         media = fonte.fetch("https://myembed.biz/filme/tt22084616")
 
@@ -147,7 +135,7 @@ class SerieNaoSuportadaTest(unittest.TestCase):
 class RegistryTest(unittest.TestCase):
     def _registry(self, cliente: ClienteFake) -> SourceRegistry:
         registry = SourceRegistry()
-        registry.register(MyEmbedSource(client=cliente, resolver=None, resolve_servers=False))
+        registry.register(MyEmbedSource(client=cliente, resolver=ResolverFake()))
         return registry
 
     def test_registry_extrai_filme(self) -> None:
@@ -156,7 +144,7 @@ class RegistryTest(unittest.TestCase):
         media = registry.extract("myembed", "tt22084616")
 
         self.assertEqual(media.external_id, "tt22084616")
-        self.assertEqual(media.links[0].kind, StreamKind.EMBED)
+        self.assertEqual(media.links, [])
 
     def test_names_inclui_myembed(self) -> None:
         registry = self._registry(ClienteFake())

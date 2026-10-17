@@ -17,7 +17,7 @@ from typing import ClassVar
 from sources.base import Source
 from sources.embed_urls import EmbedTarget, parse_embed_url
 from sources.errors import SourceError
-from sources.models import Episode, Media, MediaKind, Season, StreamKind, StreamLink
+from sources.models import Episode, Media, MediaKind, Season, StreamLink
 from sources.playerflix import PlayerFlixClient, ServerOption
 from sources.resolver import PlaywrightServerResolver, links_do_resultado
 
@@ -31,13 +31,9 @@ class MyEmbedSource(Source):
         self,
         client: PlayerFlixClient | None = None,
         resolver: PlaywrightServerResolver | None = None,
-        resolve_servers: bool = True,
-        keep_embeds: bool = True,
     ) -> None:
         self.client = client or PlayerFlixClient()
         self.resolver = resolver or PlaywrightServerResolver()
-        self.resolve_servers = resolve_servers
-        self.keep_embeds = keep_embeds
 
     def fetch(self, external_id: str, **_: object) -> Media:
         """Filme por IMDb ID (tt…), aceitando URL/iframe do embed."""
@@ -91,28 +87,13 @@ class MyEmbedSource(Source):
         )
 
     def _ligar(self, options: list[ServerOption], referer: str) -> list[StreamLink]:
-        """Resolve os servers para mídia real; fallback: guarda os embeds."""
-        if not options:
-            return []
+        """Resolve os servers para mídia real; sem vídeo, devolve lista vazia."""
         links: list[StreamLink] = []
-        if self.resolve_servers:
-            for result in self.resolver.resolve(options, referer=referer):
-                for url, resolution, kind in links_do_resultado(result):
-                    links.append(
-                        StreamLink(url=url, resolution=resolution, label=result.option.label, kind=kind)
-                    )
-                for aviso in result.avisos:
-                    logger.warning("[%s] %s", result.option.id, aviso)
-
-        if not links and self.keep_embeds:
-            # não achou mídia direta: devolve o player como referência
-            for option in options:
-                links.append(
-                    StreamLink(
-                        url=option.embed_url,
-                        resolution="",
-                        label=option.label,
-                        kind=StreamKind.EMBED,
-                    )
-                )
+        if not options:
+            return links
+        for result in self.resolver.resolve(options, referer=referer):
+            for url, resolution in links_do_resultado(result):
+                links.append(StreamLink(url=url, resolution=resolution, label=result.option.label))
+            for aviso in result.avisos:
+                logger.warning("[%s] %s", result.option.id, aviso)
         return links

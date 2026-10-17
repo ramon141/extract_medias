@@ -1,6 +1,7 @@
 """Resolve players de terceiro (options[] do playerflix) para mídia real.
 
-Técnica: navega cada player com Playwright (Chromium real), escuta a rede e
+Primeiro tenta o caminho direto (sources.direct, só HTTP). Se o player não
+permitir, navega com Playwright (Chromium real), escuta a rede e
 captura requisições de vídeo (m3u8/mp4) que o player dispara ao iniciar.
 Se o vídeo não inicia sozinho, tenta cliques nos seletores de play comuns.
 
@@ -21,11 +22,18 @@ from typing import TYPE_CHECKING
 
 import requests
 
-from sources.models import StreamKind
+from sources.direct import url_direta
 from sources.playerflix import ServerOption
 
 if TYPE_CHECKING:
-    from playwright.sync_api import BrowserContext, Page, Request, ViewportSize
+    from playwright.sync_api import (
+        Browser,
+        BrowserContext,
+        Page,
+        Playwright,
+        Request,
+        ViewportSize,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +103,34 @@ def _guess_resolution(url: str) -> str:
     return "auto"
 
 
+class _NavegadorSobDemanda:
+    """Sobe o Chromium só na primeira vez que alguém pedir o contexto."""
+
+    def __init__(self) -> None:
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+        self._contexto: BrowserContext | None = None
+
+    def contexto(self) -> BrowserContext:
+        if self._contexto is None:
+            from playwright.sync_api import sync_playwright
+
+            self._playwright = sync_playwright().start()
+            self._browser = self._playwright.chromium.launch(headless=True)
+            self._contexto = self._browser.new_context(
+                user_agent=_DEFAULT_UA,
+                viewport=_VIEWPORT,
+                locale="pt-BR",
+            )
+        return self._contexto
+
+    def fechar(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+        if self._playwright is not None:
+            self._playwright.stop()
+
+
 class PlaywrightServerResolver:
     """Abre os players com Playwright e captura as URLs de mídia real."""
 
@@ -115,30 +151,40 @@ class PlaywrightServerResolver:
         self.verify_timeout = verify_timeout
 
     def resolve(self, options: list[ServerOption], referer: str = "") -> list[ServerResult]:
-        """Resolve os servers em ordem; devolve um resultado por server tentado."""
-        from playwright.sync_api import sync_playwright
+        """Resolve os servers em ordem; devolve um resultado por server tentado.
 
+        Tenta primeiro o caminho direto (HTTP); o navegador só abre se for preciso.
+        """
         resultados: list[ServerResult] = []
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            contexto = browser.new_context(
-                user_agent=_DEFAULT_UA,
-                viewport=_VIEWPORT,
-                locale="pt-BR",
-            )
-            try:
-                for option in options:
-                    result = self._resolve_option(contexto, option, referer)
-                    resultados.append(result)
-                    if result.streams and self.stop_after_first_stream:
-                        break
-            finally:
-                browser.close()
+        navegador = _NavegadorSobDemanda()
+        try:
+            for option in options:
+                result = self._resolve_direto(option, referer)
+                if not result.streams:
+                    result = self._resolve_option(navegador.contexto(), option, referer)
+                resultados.append(result)
+                if result.streams and self.stop_after_first_stream:
+                    break
+        finally:
+            navegador.fechar()
 
         if self.verify:
             for result in resultados:
                 self._verify_streams(result)
         return resultados
+
+    def _resolve_direto(self, option: ServerOption, referer: str) -> ServerResult:
+        """Caminho rápido sem navegador; resultado vazio se o player não permitir."""
+        resultado = ServerResult(option=option)
+        try:
+            url = url_direta(option, referer, timeout=self.verify_timeout)
+        except requests.RequestException as erro:
+            logger.debug("caminho direto falhou [%s]: %s", option.id, erro)
+            return resultado
+        if url:
+            logger.debug("link direto [%s]: %s", option.id, url[:140])
+            resultado.streams.append(url)
+        return resultado
 
     def _resolve_option(
         self, contexto: BrowserContext, option: ServerOption, referer: str
@@ -232,6 +278,6 @@ class PlaywrightServerResolver:
         result.streams = validos
 
 
-def links_do_resultado(result: ServerResult) -> list[tuple[str, str, StreamKind]]:
-    """Converte streams achados em (url, resolution, kind)."""
-    return [(url, _guess_resolution(url), StreamKind.STREAM) for url in result.streams]
+def links_do_resultado(result: ServerResult) -> list[tuple[str, str]]:
+    """Converte streams achados em (url, resolution)."""
+    return [(url, _guess_resolution(url)) for url in result.streams]

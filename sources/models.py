@@ -7,19 +7,11 @@ class MediaKind(Enum):
     SERIES = "series"
 
 
-class StreamKind(Enum):
-    """`EMBED` é o player de terceiro (iframe); `STREAM` é mídia direta (m3u8/mp4)."""
-
-    EMBED = "embed"
-    STREAM = "stream"
-
-
 @dataclass(frozen=True)
 class StreamLink:
     url: str
     resolution: str
     label: str = ""
-    kind: StreamKind = StreamKind.STREAM
 
 
 @dataclass
