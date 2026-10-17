@@ -25,11 +25,20 @@ from sources.resolver import PlaywrightServerResolver, links_do_resultado
 logger = logging.getLogger(__name__)
 
 _VIDSRC = "https://vidsrc.to/embed"
+_WATCHPLAY = "https://v1.watchplay.shop"
 
 
-def _vidsrc(caminho: str) -> ServerOption:
-    """Servidor extra, tentado depois dos que o playerflix lista."""
-    return ServerOption(id="vidsrc", label="VidSrc", embed_url=f"{_VIDSRC}/{caminho}")
+def _com_extras(options: list[ServerOption], watchplay: str, vidsrc: str) -> list[ServerOption]:
+    """Servidores que não dependem do playerflix, tentados depois dos que ele lista.
+
+    O WatchPlay (rápido, sem navegador) só entra se o playerflix não o listou; ele também
+    aceita o código IMDb de séries, que o playerflix nem sempre conhece. O VidSrc é o último.
+    """
+    extras: list[ServerOption] = []
+    if not any(option.id == "watchplay" for option in options):
+        extras.append(ServerOption(id="watchplay", label="WatchPlay", embed_url=f"{_WATCHPLAY}/{watchplay}"))
+    extras.append(ServerOption(id="vidsrc", label="VidSrc", embed_url=f"{_VIDSRC}/{vidsrc}"))
+    return [*options, *extras]
 
 
 class MyEmbedSource(Source):
@@ -49,7 +58,7 @@ class MyEmbedSource(Source):
         if alvo.kind is not None and alvo.kind is not MediaKind.MOVIE:
             raise SourceError("Esse alvo é de série: use fetch_serie().")
         info, options = self._consultar(lambda: self.client.filme(alvo.external_id))
-        options = [*options, _vidsrc(f"movie/{alvo.external_id}")]
+        options = _com_extras(options, f"movie/{alvo.external_id}", f"movie/{alvo.external_id}")
         return Media(
             external_id=alvo.external_id,
             title=info.title,
@@ -72,7 +81,11 @@ class MyEmbedSource(Source):
             info, options = self._consultar(
                 lambda: self.client.temporada_episodio(external_id, season, episode)
             )
-            options = [*options, _vidsrc(f"tv/{external_id}/{season}/{episode}")]
+            options = _com_extras(
+                options,
+                f"tvshow/{external_id}/{season}/{episode}",
+                f"tv/{external_id}/{season}/{episode}",
+            )
             links = self._ligar(
                 options,
                 referer=f"https://playerflix.ink/serie/{external_id}/{season}/{episode}",

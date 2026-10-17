@@ -56,6 +56,7 @@ class ResolverFake(PlaywrightServerResolver):
 
     def resolve(self, options: list[ServerOption], referer: str = "") -> list[ServerResult]:
         self.referer_recebido = referer
+        self.ids_recebidos = [option.id for option in options]
         return [
             ServerResult(option=option, streams=list(self.mapa.get(option.id, [])))
             for option in options
@@ -109,6 +110,52 @@ class FilmeTest(unittest.TestCase):
 
         self.assertEqual([link.url for link in media.links], ["https://cdn/master.m3u8"])
         self.assertEqual(media.links[0].label, "VidSrc")
+
+    def test_filme_ganha_watchplay_e_vidsrc_como_extras(self) -> None:
+        resolver = ResolverFake()
+        fonte = MyEmbedSource(client=ClienteFake(filme=(INFO_FILME, [])), resolver=resolver)
+
+        _ = fonte.fetch("tt0133093")
+
+        self.assertEqual(resolver.ids_recebidos, ["watchplay", "vidsrc"])
+
+    def test_watchplay_nao_repete_se_o_playerflix_ja_listou(self) -> None:
+        resolver = ResolverFake()
+        fonte = MyEmbedSource(client=ClienteFake(filme=(INFO_FILME, list(OPTS_FILME))), resolver=resolver)
+
+        _ = fonte.fetch("tt0133093")
+
+        self.assertEqual(resolver.ids_recebidos, ["watchplay", "embedplayer", "vidsrc"])
+
+    def test_serie_com_imdb_desconhecido_ganha_watchplay(self) -> None:
+        class SemSerie(ClienteFake):
+            def temporada_episodio(self, tmdb_id: str, temporada: int | None, episodio: int | None) -> tuple[TitleInfo, list[ServerOption]]:
+                raise SourceError("desconhecido")
+
+        resolver = ResolverFake(mapa={"watchplay": ["https://cdn/a.m3u8"]})
+        fonte = MyEmbedSource(client=SemSerie(), resolver=resolver)
+
+        media = fonte.fetch_serie("tt0903747", season=1, episode=1)
+
+        self.assertEqual(resolver.ids_recebidos, ["watchplay", "vidsrc"])
+        self.assertEqual(media.seasons[0].episodes[0].links[0].url, "https://cdn/a.m3u8")
+
+    def test_watchplay_404_nao_abre_navegador(self) -> None:
+        import requests
+
+        from unittest import mock
+
+        resposta = requests.Response()
+        resposta.status_code = 404
+        erro = requests.HTTPError(response=resposta)
+        resolver = PlaywrightServerResolver(navegadores=1)
+        option = ServerOption(id="watchplay", label="W", embed_url="https://v1.watchplay.shop/tvshow/tt1/1/1")
+
+        with mock.patch("sources.resolver.url_direta", side_effect=erro):
+            resultado = resolver._resolve_direto(option, "")  # pyright: ignore[reportPrivateUsage]
+
+        self.assertTrue(resultado.definitivo)
+        self.assertEqual(resultado.streams, [])
 
     def test_url_completa_aceita_tambem(self) -> None:
         cliente = ClienteFake(filme=(INFO_FILME, []))

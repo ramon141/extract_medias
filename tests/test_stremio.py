@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from sources.models import StreamLink
+from sources.resolver import USER_AGENT
 from stremio import MANIFEST, Extrator, criar_handler, para_stremio
 
 
@@ -136,6 +137,10 @@ class FormatoStremioTest(unittest.TestCase):
         stream = para_stremio(LINK)
         self.assertEqual(stream["url"], LINK.url)
         self.assertEqual(stream["name"], "WatchPlay")
+
+    def test_stream_manda_o_user_agent_do_extrator(self) -> None:
+        dicas = para_stremio(LINK)["behaviorHints"]
+        self.assertEqual(dicas, {"notWebReady": True, "proxyHeaders": {"request": {"User-Agent": USER_AGENT}}})
 
 
 if __name__ == "__main__":

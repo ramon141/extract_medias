@@ -21,6 +21,7 @@ from urllib.parse import unquote, urlparse
 
 from sources.models import StreamLink
 from sources.myembed import MyEmbedSource
+from sources.resolver import USER_AGENT
 
 logger = logging.getLogger("stremio")
 
@@ -102,7 +103,11 @@ def para_stremio(link: StreamLink) -> dict[str, object]:
         "url": link.url,
         "name": link.label or "Extract Medias",
         "title": f"{link.label} · {link.resolution}" if link.label else link.resolution,
-        "behaviorHints": {"notWebReady": True},
+        # o Google (Blogger) só serve o vídeo para o mesmo User-Agent que o achou
+        "behaviorHints": {
+            "notWebReady": True,
+            "proxyHeaders": {"request": {"User-Agent": USER_AGENT}},
+        },
     }
 
 

@@ -80,6 +80,14 @@ def _embedplayer(option: ServerOption, referer: str, timeout: float) -> str | No
     return extrair_url_fireplayer(resposta.text)
 
 
+def resposta_direta_e_definitiva(option: ServerOption) -> bool:
+    """WatchPlay escreve o link na página: se ela não tem, o navegador também não acharia.
+
+    Nos demais (ex.: EmbedPlayer) a falha do caminho direto ainda pode ser contornada no navegador.
+    """
+    return urlparse(option.embed_url).netloc.lower().endswith("watchplay.shop")
+
+
 def url_direta(option: ServerOption, referer: str, timeout: float = 15.0) -> str | None:
     """Link do vídeo sem abrir navegador; None quando o player não permite."""
     host = urlparse(option.embed_url).netloc.lower()
