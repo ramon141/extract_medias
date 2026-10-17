@@ -16,6 +16,7 @@ from collections.abc import Callable
 from typing import ClassVar
 
 from sources.base import Source
+from sources.direct import tem_caminho_direto
 from sources.embed_urls import EmbedTarget, parse_embed_url
 from sources.errors import SourceError
 from sources.models import Episode, Media, MediaKind, Season, StreamLink
@@ -128,7 +129,8 @@ class MyEmbedSource(Source):
         só gastavam o tempo limite sem entregar vídeo.
         """
         links: list[StreamLink] = []
-        options = [option for option in options if option.healthy]
+        # sem navegador primeiro: o resultado rápido não espera o Blogger/VidSrc (sort estável)
+        options = sorted((option for option in options if option.healthy), key=lambda o: not tem_caminho_direto(o))
         if not options:
             return links
         for result in self.resolver.resolve(options, referer=referer):

@@ -22,8 +22,11 @@ from concurrent.futures import Future
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
+import requests
+
 from sources.models import StreamLink
 from sources.myembed import MyEmbedSource
+from sources.playerflix import _dict  # pyright: ignore[reportPrivateUsage]
 from sources.resolver import USER_AGENT
 
 logger = logging.getLogger("stremio")
@@ -46,6 +49,21 @@ _ID_FILME = re.compile(r"^tt\d+$")
 _ID_EPISODIO = re.compile(r"^(tt\d+):(\d+):(\d+)$")
 
 
+_CINEMETA = "https://v3-cinemeta.strem.io/meta/series/{imdb}.json"
+
+
+def tmdb_da_serie(imdb: str, timeout: float = 8.0) -> str | None:
+    """Código TMDB da série (o catálogo só lista os servidores bons por ele); None se não achar."""
+    try:
+        resposta = requests.get(_CINEMETA.format(imdb=imdb), timeout=timeout)
+        resposta.raise_for_status()
+        meta = _dict(_dict(resposta.json()).get("meta"))
+    except (requests.RequestException, ValueError):
+        return None
+    codigo = meta.get("moviedb_id")
+    return str(codigo) if isinstance(codigo, int) and codigo > 0 else None
+
+
 class Extrator:
     """Extrai os links de um id do Stremio; pedidos diferentes andam em paralelo.
 
@@ -57,6 +75,7 @@ class Extrator:
         self._trava = threading.Lock()  # só protege os dicionários abaixo, nunca a extração
         self._cache: dict[str, tuple[float, list[StreamLink]]] = {}
         self._em_andamento: dict[str, Future[list[StreamLink]]] = {}
+        self._tmdb: dict[str, str] = {}
 
     def links(self, tipo: str, identificador: str) -> list[StreamLink]:
         chave = f"{tipo}/{identificador}"
@@ -84,6 +103,12 @@ class Extrator:
             with self._trava:
                 del self._em_andamento[chave]
 
+    def _buscar_tmdb(self, imdb: str) -> str:
+        codigo = tmdb_da_serie(imdb)
+        if codigo:
+            self._tmdb[imdb] = codigo
+        return codigo or imdb  # sem TMDB, segue pelo IMDb (WatchPlay/VidSrc aceitam)
+
     def fechar(self) -> None:
         self.fonte.resolver.fechar()
 
@@ -95,8 +120,9 @@ class Extrator:
         episodio = _ID_EPISODIO.match(identificador)
         if not episodio:
             return []
+        imdb = episodio.group(1)
         media = self.fonte.fetch_serie(
-            episodio.group(1), season=int(episodio.group(2)), episode=int(episodio.group(3))
+            self._tmdb.get(imdb) or self._buscar_tmdb(imdb), season=int(episodio.group(2)), episode=int(episodio.group(3))
         )
         return media.seasons[0].episodes[0].links
 

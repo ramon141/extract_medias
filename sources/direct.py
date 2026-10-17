@@ -88,6 +88,12 @@ def resposta_direta_e_definitiva(option: ServerOption) -> bool:
     return urlparse(option.embed_url).netloc.lower().endswith("watchplay.shop")
 
 
+def tem_caminho_direto(option: ServerOption) -> bool:
+    """True para os players resolvidos só por HTTP (sem navegador)."""
+    host = urlparse(option.embed_url).netloc.lower()
+    return host.endswith("watchplay.shop") or (host.startswith("embedplayer") and "/video/" in option.embed_url)
+
+
 def url_direta(option: ServerOption, referer: str, timeout: float = 15.0) -> str | None:
     """Link do vídeo sem abrir navegador; None quando o player não permite."""
     host = urlparse(option.embed_url).netloc.lower()
